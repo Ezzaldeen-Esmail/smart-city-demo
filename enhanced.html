@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Professional Student Photo Splitter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- OpenCV.js for local image processing -->
+    <script async src="https://docs.opencv.org/4.5.4/opencv.js" onload="onOpenCvReady();"></script>
+    <style>
+        .photo-card {
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            border-width: 2px;
+        }
+        .photo-card:hover {
+            transform: translateY(-8px) scale(1.02);
+            border-color: #2563eb;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.15);
+        }
+        #canvas-container { display: none; }
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #2563eb;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .ai-active {
+            box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+            animation: border-glow 2s infinite;
+        }
+        @keyframes border-glow {
+            0%, 100% { border-color: #6366f1; }
+            50% { border-color: #818cf8; }
+        }
+    </style>
+</head>
+<body class="bg-[#f8fafc] min-h-screen font-sans text-slate-900">
+
+    <div class="max-w-7xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="text-center mb-12">
+            <div class="inline-flex items-center justify-center p-4 bg-white rounded-3xl shadow-sm mb-6 border border-slate-100">
+                <svg class="w-10 h-10 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+            </div>
+            <h1 class="text-5xl font-black text-slate-900 tracking-tight mb-3">Professional Portrait Scanner</h1>
+            <p class="text-slate-500 text-lg max-w-2xl mx-auto">
+                No more manual cropping. We detect the number of faces and generate high-quality 4:6 crops for every student.
+            </p>
+        </header>
+
+        <!-- Main Dashboard -->
+        <div class="grid lg:grid-cols-4 gap-10">
+            
+            <!-- Sidebar Controls -->
+            <div class="lg:col-span-1 space-y-8">
+                <div class="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+                    <h3 class="font-bold text-slate-900 mb-6 flex items-center gap-2">
+                        <span class="flex items-center justify-center w-6 h-6 rounded-full bg-blue-600 text-white text-[10px] font-black">1</span>
+                        Source Sheet
+                    </h3>
+                    <label class="block w-full text-center p-10 border-2 border-dashed border-slate-200 rounded-2xl cursor-pointer hover:border-blue-500 hover:bg-blue-50/50 transition-all group">
+                        <span class="text-slate-400 group-hover:text-blue-600 text-sm font-bold" id="upload-label">Upload Scanned Page</span>
+                        <input type="file" id="upload" accept="image/*" class="hidden" disabled>
+                        <p class="text-[10px] mt-3 text-slate-300 font-mono tracking-tighter" id="cv-status">Waking up CV engine...</p>
+                    </label>
+
+                    <div id="processing-ui" class="mt-10 space-y-8 opacity-50 pointer-events-none">
+                        <div>
+                            <div class="flex justify-between mb-3">
+                                <label class="text-xs font-black text-slate-400 uppercase tracking-widest">Crop Margin</label>
+                                <span id="sens-val" class="text-xs font-bold text-blue-600">Standard</span>
+                            </div>
+                            <input type="range" id="sensitivity" min="50" max="250" value="120" class="w-full h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-blue-600">
+                        </div>
+
+                        <div class="space-y-4 pt-6 border-t border-slate-100">
+                            <button id="ai-deep-search" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-4 rounded-2xl transition shadow-xl shadow-indigo-100 flex items-center justify-center gap-3 text-sm">
+                                <span>✨ Deep Face Detection</span>
+                            </button>
+                            <button id="download-zip" class="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-4 rounded-2xl transition flex items-center justify-center gap-2 text-sm">
+                                📥 Export Full Class (.zip)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI Sidebar Component -->
+                <div id="ai-sidebar" class="bg-indigo-50 border border-indigo-100 p-8 rounded-3xl shadow-sm opacity-50 pointer-events-none transition-opacity">
+                    <h3 class="font-bold text-indigo-900 mb-4 flex items-center gap-2">
+                        <svg class="w-5 h-5 text-indigo-600" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L14.5 9H22L16 14L18.5 21L12 17L5.5 21L8 14L2 9H9.5L12 2Z"/></svg>
+                        Teacher's Assistant
+                    </h3>
+                    <div id="ai-sheet-result" class="text-xs text-indigo-800/80 font-medium leading-relaxed italic">
+                        Upload your scan. I'll count the students and check for photo clarity automatically.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Content Area -->
+            <div class="lg:col-span-3">
+                <div id="status-bar" class="hidden mb-8 flex items-center justify-between bg-white border border-slate-200 px-8 py-5 rounded-3xl shadow-sm">
+                    <div class="flex items-center gap-5">
+                        <div class="loading-spinner hidden" id="main-spinner"></div>
+                        <span id="status-text" class="text-sm font-bold text-slate-800">Ready to split.</span>
+                    </div>
+                    <div class="flex gap-2">
+                        <span id="counter-badge" class="bg-blue-600 text-white text-xs font-black px-5 py-2 rounded-full shadow-lg shadow-blue-100">0 Portraits</span>
+                    </div>
+                </div>
+
+                <div id="grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-8">
+                    <!-- Dynamic cards -->
+                </div>
+
+                <!-- Empty State -->
+                <div id="empty-state" class="flex flex-col items-center justify-center py-40 bg-white rounded-[40px] border-2 border-dashed border-slate-100 text-slate-300">
+                    <div class="p-6 bg-slate-50 rounded-full mb-6">
+                        <svg class="w-16 h-16 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                    </div>
+                    <p class="font-black text-slate-400 text-xl">No Class Sheet Loaded</p>
+                    <p class="text-sm mt-2">Professional crops will appear here once you upload.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden processing -->
+    <div id="canvas-container">
+        <canvas id="proc-canvas"></canvas>
+    </div>
+
+    <!-- AI Toast Message -->
+    <div id="ai-toast" class="fixed bottom-10 left-1/2 -translate-x-1/2 translate-y-24 opacity-0 bg-slate-900 text-white px-10 py-5 rounded-full shadow-2xl transition-all duration-700 flex items-center gap-5 z-50">
+        <div class="loading-spinner border-white/10 border-t-white"></div>
+        <span id="ai-toast-text" class="text-sm font-black tracking-wide">AI Professional Cropping...</span>
+    </div>
+
+    <script>
+        const apiKey = ""; 
+        let cvReady = false;
+        
+        // UI Elements
+        const upload = document.getElementById('upload');
+        const cvStatus = document.getElementById('cv-status');
+        const grid = document.getElementById('grid');
+        const statusBar = document.getElementById('status-bar');
+        const statusText = document.getElementById('status-text');
+        const mainSpinner = document.getElementById('main-spinner');
+        const processingUI = document.getElementById('processing-ui');
+        const aiSidebar = document.getElementById('ai-sidebar');
+        const emptyState = document.getElementById('empty-state');
+        const counterBadge = document.getElementById('counter-badge');
+        const sensitivity = document.getElementById('sensitivity');
+        const sensVal = document.getElementById('sens-val');
+        const downloadZipBtn = document.getElementById('download-zip');
+        const aiDeepSearchBtn = document.getElementById('ai-deep-search');
+        const aiSheetResult = document.getElementById('ai-sheet-result');
+        const aiToast = document.getElementById('ai-toast');
+        const aiToastText = document.getElementById('ai-toast-text');
+
+        let originalImg = null;
+        let originalBase64 = null;
+        let croppedImages = [];
+
+        function onOpenCvReady() {
+            cvReady = true;
+            cvStatus.innerText = "CV Core Ready ✅";
+            cvStatus.classList.replace('text-slate-300', 'text-green-600');
+            upload.disabled = false;
+        }
+
+        async function callGemini(payload, endpoint = "generateContent", model = "gemini-2.5-flash-preview-09-2025") {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:${endpoint}?key=${apiKey}`;
+            for (let i = 0; i < 5; i++) {
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!response.ok) throw new Error('API Error');
+                    return await response.json();
+                } catch (e) {
+                    if (i === 4) throw e;
+                    await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
+                }
+            }
+        }
+
+        function showToast(text, loading = true) {
+            aiToastText.innerText = text;
+            aiToast.classList.remove('translate-y-24', 'opacity-0');
+            aiToast.querySelector('.loading-spinner').style.display = loading ? 'block' : 'none';
+        }
+
+        function hideToast() {
+            aiToast.classList.add('translate-y-24', 'opacity-0');
+        }
+
+        upload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            statusBar.classList.remove('hidden');
+            emptyState.classList.add('hidden');
+            mainSpinner.classList.remove('hidden');
+            grid.innerHTML = '';
+            croppedImages = [];
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                originalBase64 = event.target.result.split(',')[1];
+                originalImg = new Image();
+                originalImg.src = event.target.result;
+                originalImg.onload = () => {
+                    detectAndCrop();
+                    processingUI.classList.remove('opacity-50', 'pointer-events-none');
+                    aiSidebar.classList.remove('opacity-50', 'pointer-events-none');
+                    mainSpinner.classList.add('hidden');
+                    analyzeClassSheet();
+                };
+            };
+            reader.readAsDataURL(file);
+        });
+
+        sensitivity.addEventListener('input', () => {
+            const val = parseInt(sensitivity.value);
+            sensVal.innerText = val < 100 ? "Loose" : val > 150 ? "Strict" : "Standard";
+        });
+
+        sensitivity.addEventListener('change', () => {
+            if (originalImg) detectAndCrop();
+        });
+
+        // Local Smart CV detection - ignores fragments
+        function detectAndCrop() {
+            grid.innerHTML = '';
+            croppedImages = [];
+            statusText.innerText = "Scanning page for full portraits...";
+            
+            setTimeout(() => {
+                const src = cv.imread(originalImg);
+                const gray = new cv.Mat();
+                const blurred = new cv.Mat();
+                const edges = new cv.Mat();
+                const dilated = new cv.Mat();
+                const contours = new cv.MatVector();
+                const hierarchy = new cv.Mat();
+
+                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+                cv.GaussianBlur(gray, blurred, new cv.Size(7, 7), 0);
+                
+                const sensValue = parseInt(sensitivity.value);
+                cv.Canny(blurred, edges, sensValue / 3, sensValue);
+
+                let M = cv.Mat.ones(7, 7, cv.CV_8U);
+                cv.dilate(edges, dilated, M, new cv.Point(-1, -1), 1, cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
+
+                cv.findContours(dilated, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+                let detections = [];
+                // STRICT FILTERING: Only rectangles of a certain size (prevents cropping "parts")
+                const minArea = (src.rows * src.cols) * 0.003; 
+                const maxArea = (src.rows * src.cols) * 0.15;
+
+                for (let i = 0; i < contours.size(); ++i) {
+                    let cnt = contours.get(i);
+                    let area = cv.contourArea(cnt);
+                    
+                    if (area > minArea && area < maxArea) {
+                        let rect = cv.boundingRect(cnt);
+                        const aspect = rect.width / rect.height;
+                        
+                        // ID photo aspect ratio check (roughly vertical rectangle)
+                        if (aspect > 0.45 && aspect < 1.1) {
+                            detections.push(rect);
+                        }
+                    }
+                }
+
+                // Sort properly to match reading order
+                detections.sort((a, b) => {
+                    const rowTol = src.rows * 0.05;
+                    if (Math.abs(a.y - b.y) > rowTol) return a.y - b.y;
+                    return a.x - b.x;
+                });
+
+                detections.forEach((rect, idx) => {
+                    // Force a professional 4:6 crop centered on the found region
+                    const targetAspect = 0.67;
+                    let w = rect.width;
+                    let h = Math.round(w / targetAspect);
+                    
+                    // Adjust y to center vertically if possible
+                    let yShift = Math.round((h - rect.height) / 2);
+                    let nx = rect.x;
+                    let ny = Math.max(0, rect.y - yShift);
+                    
+                    // Boundary check
+                    if (ny + h > src.rows) h = src.rows - ny;
+                    if (nx + w > src.cols) w = src.cols - nx;
+
+                    let roi = src.roi(new cv.Rect(nx, ny, w, h));
+                    const canvas = document.createElement('canvas');
+                    cv.imshow(canvas, roi);
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+                    
+                    croppedImages.push(dataUrl);
+                    createPhotoCard(dataUrl, idx + 1);
+                    roi.delete();
+                });
+
+                counterBadge.innerText = `${detections.length} Portraits Found`;
+                statusText.innerText = detections.length > 0 ? `Localized ${detections.length} student cards.` : "No clear student cards found. Adjust margin slider.";
+                
+                src.delete(); gray.delete(); blurred.delete(); 
+                edges.delete(); dilated.delete(); contours.delete(); hierarchy.delete(); M.delete();
+            }, 50);
+        }
+
+        async function analyzeClassSheet() {
+            try {
+                const result = await callGemini({
+                    contents: [{
+                        parts: [
+                            { text: "Briefly count the number of faces you see on this scanned sheet. Provide a one-sentence summary of the image quality for a teacher." },
+                            { inlineData: { mimeType: "image/jpeg", data: originalBase64 } }
+                        ]
+                    }]
+                });
+                aiSheetResult.innerText = result.candidates?.[0]?.content?.parts?.[0]?.text || "Analyze ready.";
+            } catch (e) {
+                aiSheetResult.innerText = "AI assistant ready.";
+            }
+        }
+
+        function createPhotoCard(src, index) {
+            const div = document.createElement('div');
+            div.className = "photo-card bg-white p-5 rounded-[2rem] border border-slate-100 flex flex-col group relative overflow-hidden";
+            div.innerHTML = `
+                <div class="relative aspect-[4/6] overflow-hidden rounded-2xl bg-slate-50 mb-5 shadow-inner border border-slate-50">
+                    <img id="img-${index}" src="${src}" class="w-full h-full object-cover transition-all duration-1000" alt="Student ${index}">
+                    <div id="loader-${index}" class="absolute inset-0 bg-white/60 hidden items-center justify-center backdrop-blur-sm z-10">
+                        <div class="loading-spinner"></div>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-[10px] font-black text-slate-300 tracking-[0.2em] uppercase">Student #${index}</span>
+                    <div class="flex gap-2">
+                        <button onclick="polishPhoto(${index})" title="✨ Studio Polish" class="p-2 text-indigo-500 hover:bg-indigo-600 hover:text-white rounded-xl transition-all">
+                            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L14.5 9H22L16 14L18.5 21L12 17L5.5 21L8 14L2 9H9.5L12 2Z"/></svg>
+                        </button>
+                        <a href="${src}" download="Student_${index}.jpg" class="p-2 text-slate-300 hover:text-slate-900 rounded-xl transition-all">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a2 2 0 002 2h12a2 2 0 002-2v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                        </a>
+                    </div>
+                </div>
+            `;
+            grid.appendChild(div);
+        }
+
+        // ✨ Feature: Gemini Professional Deep Search (Explicitly crops images, not parts)
+        aiDeepSearchBtn.addEventListener('click', async () => {
+            if (!originalBase64) return;
+            
+            showToast("Deep Search: Detecting full portrait card boundaries...", true);
+            aiDeepSearchBtn.disabled = true;
+            aiDeepSearchBtn.classList.add('ai-active');
+
+            try {
+                // We ask Gemini to specifically find the cards, not the faces alone
+                const prompt = "Detect every individual student photo card on this page. For each card, return its precise bounding box. Ensure you crop the FULL card, including the student's head and shoulders. Output JSON: [ { \"id\": 1, \"box_2d\": [ymin, xmin, ymax, xmax] } ]. Do not include background text or empty spaces. Return exactly the same number of boxes as there are students.";
+                
+                const result = await callGemini({
+                    contents: [{
+                        parts: [
+                            { text: prompt },
+                            { inlineData: { mimeType: "image/jpeg", data: originalBase64 } }
+                        ]
+                    }],
+                    generationConfig: { responseMimeType: "application/json" }
+                });
+                
+                const data = JSON.parse(result.candidates[0].content.parts[0].text);
+                if (data && Array.isArray(data)) {
+                    grid.innerHTML = '';
+                    croppedImages = [];
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    
+                    data.forEach((item, idx) => {
+                        const box = item.box_2d; 
+                        
+                        let y = (box[0] / 1000) * originalImg.height;
+                        let x = (box[1] / 1000) * originalImg.width;
+                        let h = ((box[2] - box[0]) / 1000) * originalImg.height;
+                        let w = ((box[3] - box[1]) / 1000) * originalImg.width;
+
+                        // Force 4:6 aspect ratio
+                        const targetAspect = 0.67;
+                        if (w / h > targetAspect) {
+                            // Too wide, adjust width
+                            w = h * targetAspect;
+                        } else {
+                            // Too tall, adjust height
+                            h = w / targetAspect;
+                        }
+
+                        canvas.width = w;
+                        canvas.height = h;
+                        ctx.drawImage(originalImg, x, y, w, h, 0, 0, w, h);
+                        
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+                        croppedImages.push(dataUrl);
+                        createPhotoCard(dataUrl, idx + 1);
+                    });
+                    
+                    counterBadge.innerText = `${data.length} Portraits Found (AI)`;
+                    showToast(`AI successfully detected ${data.length} students!`, false);
+                }
+            } catch (err) {
+                showToast("Deep Search Error. Try local scan.", false);
+            } finally {
+                aiDeepSearchBtn.disabled = false;
+                aiDeepSearchBtn.classList.remove('ai-active');
+                setTimeout(hideToast, 3000);
+            }
+        });
+
+        // Studio Polish
+        window.polishPhoto = async (index) => {
+            const imgElement = document.getElementById(`img-${index}`);
+            const loader = document.getElementById(`loader-${index}`);
+            const base64Crop = imgElement.src.split(',')[1];
+            
+            loader.classList.replace('hidden', 'flex');
+            showToast(`Polishing Student #${index}...`);
+
+            try {
+                const result = await callGemini({
+                    contents: [{
+                        parts: [
+                            { text: "Professional school portrait enhancement: 1. Replace the background with a soft studio-blue gradient. 2. Sharpen the face. 3. Ensure a 4:6 vertical orientation. Maintain identical student appearance." },
+                            { inlineData: { mimeType: "image/jpeg", data: base64Crop } }
+                        ]
+                    }],
+                    generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+                }, "generateContent", "gemini-2.5-flash-image-preview");
+
+                const polishedBase64 = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+                
+                if (polishedBase64) {
+                    imgElement.src = `data:image/png;base64,${polishedBase64}`;
+                    croppedImages[index-1] = imgElement.src;
+                    showToast(`Student #${index} Studio Grade!`, false);
+                    setTimeout(hideToast, 2000);
+                }
+            } catch (err) {
+                showToast("Enhancement Error.", false);
+                setTimeout(hideToast, 3000);
+            } finally {
+                loader.classList.replace('flex', 'hidden');
+            }
+        };
+
+        downloadZipBtn.addEventListener('click', async () => {
+            if (croppedImages.length === 0) return;
+            downloadZipBtn.innerText = "⏳ Building Class ZIP...";
+            downloadZipBtn.disabled = true;
+
+            const zip = new JSZip();
+            const folder = zip.folder("Student_Portraits");
+            croppedImages.forEach((dataUrl, i) => {
+                const base64 = dataUrl.split(',')[1];
+                folder.file(`Student_${i+1}.jpg`, base64, {base64: true});
+            });
+
+            const blob = await zip.generateAsync({type: "blob"});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `Class_Photos_Export_${Date.now()}.zip`;
+            a.click();
+            downloadZipBtn.innerText = "Export Full Class (.zip)";
+            downloadZipBtn.disabled = false;
+        });
+    </script>
+</body>
+</html>
